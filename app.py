@@ -1,249 +1,220 @@
 import streamlit as st
 import numpy as np
-import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from asmt_engine import *
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
 
 # ==========================================
-# 1. 页面基础设置
+# 全局页面配置
 # ==========================================
-st.set_page_config(page_title="ASMT Simulator", page_icon="🌊", layout="wide")
-st.title("Ammonia Spill Modeling Tool (ASMT)")
-st.markdown("A comprehensive, fully-coupled physics and ecological system computing real-time Eulerian-Lagrangian transport, thermodynamic mass-transfer, and eutrophication ODEs. No empirical shortcuts.")
-st.divider()
+st.set_page_config(page_title="Ammonia Simulation Suite", layout="wide", page_icon="🌊")
 
 # ==========================================
-# 2. 侧边栏：模块选择与参数定义
+# 侧边栏：全局导航
 # ==========================================
-st.sidebar.header("Simulation Mode")
-sim_mode = st.sidebar.radio("Select Target Module:", 
-["1. Surface Spill Only (Air)", 
-"2. Underwater Leak Only (Ocean)", 
-"3. Combined Simulation (Both)"])
-st.sidebar.divider()
+st.sidebar.title("🧭 Navigation")
+app_mode = st.sidebar.radio(
+    "Select Simulation Phase:",
+    ["Phase 1: Underwater Dissolution", "Phase 2: Surface Volatilization"]
+)
+st.sidebar.markdown("---")
 
-with st.sidebar.form("sim_inputs_form"):
-    st.header("1. Spill Characteristics")
-
-    if "Surface" in sim_mode:
-        st.caption("Data Source: ASMT Framework (draft.docx)")
-        m_total = st.number_input("Total Released Mass (kg)", value=136.0, step=10.0)
-        f_vap = st.number_input("Initial Vaporization Fraction", min_value=0.0, max_value=1.0, value=0.45, step=0.05)
-        d_depth = st.number_input("Mixing Depth (m)", value=0.0625, format="%.4f")
-        depth = 0.0
-        duration = 60.0
-        
-    elif "Underwater" in sim_mode:
-        st.caption("Data Source: Wang et al. (2025) Singapore Strait")
-        spill_rate = st.number_input("Spill Rate (kg/s)", min_value=0.1, max_value=1800.0, value=82.6, step=1.0)
-        duration = st.number_input("Spill Duration (seconds)", min_value=1.0, value=180.0, step=10.0)
-        depth = st.number_input("Release Depth (m)", min_value=2.0, max_value=15.0, value=5.0, step=0.5)
-        m_total = spill_rate * duration
-        d_depth = depth
-        f_vap = 0.0 
-
-    else: 
-        st.caption("Combined Scenario")
-        spill_rate = st.number_input("Spill Rate (kg/s)", min_value=0.1, max_value=1800.0, value=82.6, step=1.0)
-        duration = st.number_input("Spill Duration (seconds)", min_value=1.0, value=180.0, step=10.0)
-        depth = st.number_input("Release Depth (m)", min_value=2.0, max_value=15.0, value=5.0, step=0.5)
-        m_total = spill_rate * duration
-        d_depth = depth
-        f_vap = 0.0 
-
-    st.header("2. Environmental Conditions")
-    default_temp = 8.5 if "Surface" in sim_mode else 28.0
-    temp_c = st.number_input("Water Temperature (°C)", min_value=1.0, max_value=35.0, value=default_temp, step=0.5)
-    ph = st.number_input("pH Level", min_value=7.0, max_value=11.0, value=11.0 if "Surface" in sim_mode else 8.1, step=0.1)
-    salinity = st.number_input("Salinity (PSU)", min_value=0.0, max_value=40.0, value=0.0 if "Surface" in sim_mode else 30.0, step=0.5)
+# =====================================================================
+# MODULE 1: PHASE 1 - UNDERWATER DISSOLUTION (来自 app1.py)
+# =====================================================================
+if app_mode == "Phase 1: Underwater Dissolution":
+    st.title("🌊 Phase 1: Ammonia Dissolution Analysis & Theoretical Calculator")
     
-    if "Surface" in sim_mode or "Combined" in sim_mode:
-        u10 = st.number_input("Wind Speed (m/s) [Air]", min_value=0.1, max_value=25.0, value=4.8, step=0.1)
-        fetch = st.number_input("Wind Fetch (m)", value=4.0, step=0.5)
-        stability = st.selectbox("Pasquill Stability Class", ['A', 'B', 'C', 'D', 'E', 'F'], index=3)
+    tab1, tab2 = st.tabs(["📊 Module 1: Empirical Model Validation", "🧮 Module 2: First-Principles Calculator"])
 
-    if "Underwater" in sim_mode or "Combined" in sim_mode:
-        current_u = st.number_input("Sea Current (m/s) [Ocean]", min_value=0.01, max_value=2.0, value=0.30, step=0.05)
-        eval_time = st.number_input("Plume Eval Time (Hours)", min_value=0.1, max_value=48.0, value=2.0, step=0.5)
+    # --- TAB 1: 0D Model Validation ---
+    with tab1:
+        st.header("📊 0D Coupled Kinetic Model")
+        col_in, col_plt = st.columns([1, 2.5])
         
-    st.subheader("3. Hydrodynamic Dispersion")
-    st.caption("Turbulent mixing parameters (Calibrated for Singapore Strait).")
-    Dx = st.number_input("Longitudinal Dispersion Dx (m²/s)", min_value=1.0, max_value=500.0, value=125.0, step=5.0)
-    Dy = st.number_input("Transverse Dispersion Dy (m²/s)", min_value=1.0, max_value=200.0, value=64.0, step=2.0)
-
-    st.subheader("4. Target Receptor (Validation)")
-    st.caption("Coordinate & Time for specific spatial-temporal validation.")
-    target_x = st.number_input("Receptor X (Downstream m)", value=378.0, step=10.0)
-    target_y = st.number_input("Receptor Y (Cross-stream m)", value=0.0, step=1.0)
-    target_t = st.number_input("Receptor T (Time hours)", value=0.35, step=0.05, format="%.2f")
-
-    submitted = st.form_submit_button("▶️ Compute Comprehensive Physics", type="primary", use_container_width=True)
-
-# 专属名词解释面板
-with st.sidebar.expander("📖 Glossary of Inputs & Outputs"):
-    st.markdown("""
-    **Key Inputs:**
-    - **Receptor X / Y / T:** The specific coordinate and time mapping to ecological zones (e.g., downstream coral reefs validation).
-    - **Plume Eval Time:** The snapshot time for the 2D spatial footprint contour map.
-    - **Longitudinal/Transverse Dispersion ($D_x, D_y$):** These define the intensity of turbulent mixing in the water column. Calibrated to reproduce rapid dilution in the Singapore Strait.
-    """)
-
-# ==========================================
-# 3. 核心计算与结果渲染
-# ==========================================
-if submitted:
-    if "Surface" in sim_mode:
-        m_puff, m_dissolved = partition_source(m_total, f_vap)
-    else:
-        m_puff, m_dissolved = calculate_underwater_rise_dissolution(m_total, depth, temp_c)
-
-    f_unionized = calc_unionized_fraction(temp_c, salinity, ph)
-    
-    avg_Q = 0.0
-    if "Surface" in sim_mode or "Combined" in sim_mode:
-        dt, total_time = 1, 3600 
-        times = np.arange(0, total_time + dt, dt)
-        history_dissolved, history_volatilized, history_bio = [], [], []
-        current_m = m_dissolved
-        cum_vol, cum_bio = 0.0, 0.0
-        k20_sec = 0.005 / 3600 
-
-        for t in times:
-            history_dissolved.append(current_m)
-            history_volatilized.append(cum_vol)
-            history_bio.append(cum_bio)
+        with col_in:
+            st.subheader("⚙️ Calibration Inputs")
+            kLa_base = st.number_input("Base kLa (at 14 L/min)", value=0.00016, format="%.5f")
+            E_factor = st.number_input("Enhancement Factor (E)", value=5.5, format="%.1f")
             
-            if current_m > 0:
-                rate_vol = calc_volatilization_rate(current_m, f_unionized, u10, fetch, temp_c, d_depth)
-                rate_bio = calc_biodegradation_rate(current_m, temp_c, k20=k20_sec)
-                dm_vol = rate_vol * dt
-                dm_bio = rate_bio * dt
-                
-                if dm_vol + dm_bio > current_m:
-                    dm_vol = current_m * (dm_vol / (dm_vol + dm_bio))
-                    dm_bio = current_m * (dm_bio / (dm_vol + dm_bio))
-                
-                current_m -= (dm_vol + dm_bio)
-                cum_vol += dm_vol
-                cum_bio += dm_bio
+            st.markdown("---")
+            st.subheader("🧪 Environment")
+            pH_val = st.slider("System pH", 7.0, 12.0, 10.8)
+            temp_val = st.slider("Temperature (°C)", 0.0, 40.0, 20.0)
+            
+            def get_free_nh3_fraction(pH, temp_C):
+                pKa = 0.09018 + 2729.92 / (temp_C + 273.15)
+                return 1 / (1 + 10**(pKa - pH))
+            
+            st.metric("Free NH3 Fraction", f"{get_free_nh3_fraction(pH_val, temp_val):.2%}")
+
+        with col_plt:
+            def ammonia_ode(t, y, current_kLa, E, pH, temp):
+                TAN = y[0]
+                V, C_sat = 20.0, 485000 
+                C_bulk_NH3 = TAN * get_free_nh3_fraction(pH, temp)
+                if t <= 600:
+                    dCdt = (current_kLa * E * (C_sat - C_bulk_NH3)) / V
+                else:
+                    dCdt = -0.00005 * TAN 
+                return [dCdt]
+
+            scenarios = [
+                {"flow": 7,  "target": 2600,  "color": "#2ecc71", "label": "7 L/min"},
+                {"flow": 14, "target": 5500,  "color": "#3498db", "label": "14 L/min"},
+                {"flow": 21, "target": 8400,  "color": "#e67e22", "label": "21 L/min"},
+                {"flow": 28, "target": 10881, "color": "#e74c3c", "label": "28 L/min"}
+            ]
+
+            fig, ax = plt.subplots(figsize=(10, 6))
+            t_eval = np.linspace(0, 720, 240)
+            for s in scenarios:
+                curr_kLa = kLa_base * (s["flow"] / 14.0)
+                sol = solve_ivp(ammonia_ode, [0, 720], [0], args=(curr_kLa, E_factor, pH_val, temp_val), t_eval=t_eval)
+                ax.plot(sol.t, sol.y[0], color=s["color"], lw=2.5, label=f'Model: {s["label"]}')
+                ax.axhline(y=s["target"], color=s["color"], ls='--', alpha=0.4, label=f'Target: {s["target"]}')
+
+            ax.set_title("Validation: Model vs Experimental Data", fontsize=14)
+            ax.set_xlabel("Time (s)")
+            ax.set_ylabel("TAN Concentration (ppm)")
+            ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+            ax.grid(True, alpha=0.3)
+            st.pyplot(fig)
+
+    # --- TAB 2: First-Principles Calculator ---
+    with tab2:
+        st.header("🧮 Theoretical Parameter Estimator")
+        st.write("Input physical dimensions to calculate mechanistic coefficients.")
+
+        with st.form("physics_form"):
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                Q_in = st.number_input("Flow Rate Q (L/min)", value=14.0, step=1.0)
+                H_in = st.number_input("Water Depth H (m)", value=0.30, step=0.05)
+            with col_f2:
+                db_in = st.number_input("Bubble Diameter db (m)", value=0.005, format="%.3f")
+                vb_in = st.number_input("Rising Velocity vb (m/s)", value=0.25, step=0.05)
+            with col_f3:
+                kr_in = st.number_input("Reaction Constant kr (1/s)", value=10.0, step=1.0)
+                st.write("**Constants:** V=20L, D=1.6e-9 m²/s")
+            
+            submit_btn = st.form_submit_button("🚀 Calculate Theoretical Factors")
+
+        if submit_btn:
+            Q_m3s = Q_in / 60000.0
+            V_m3, D_NH3 = 0.02, 1.6e-9
+            
+            a = (6 * Q_m3s * H_in) / (V_m3 * db_in * vb_in)
+            kL = 2 * np.sqrt((D_NH3 * vb_in) / (np.pi * db_in))
+            kLa_th = kL * a
+            Ha = np.sqrt(kr_in * D_NH3) / kL
+            E_th = np.sqrt(1 + Ha**2)
+
+            res_c1, res_c2, res_c3 = st.columns(3)
+            res_c1.metric("Interfacial Area (a)", f"{a:.2f} m⁻¹")
+            res_c2.metric("Theory kLa", f"{kLa_th:.5f} s⁻¹")
+            res_c3.metric("Theory E Factor", f"{E_th:.2f}")
+            
+            st.success(f"Calculated kLa: {kLa_th:.5f} | Calculated E: {E_th:.1f}. Try these in Module 1!")
+
+        st.markdown("---")
+        st.subheader("📚 Theoretical Formulas & Annotations")
+        st.write("The mechanistic derivation is based on Higbie's Penetration Theory and Hatta Number analysis:")
+        st.latex(r"1. \text{Interfacial Area (a)}: a = \frac{6 \cdot Q_{gas} \cdot H}{V_{water} \cdot d_b \cdot v_b}")
+        st.latex(r"2. \text{Liquid-side Coeff (kL)}: k_L = 2 \sqrt{\frac{D_{NH3} \cdot v_b}{\pi \cdot d_b}}")
+        st.latex(r"3. \text{Volumetric Coeff (kLa)}: k_L a = k_L \cdot a")
+        st.latex(r"4. \text{Hatta Number (Ha)}: Ha = \frac{\sqrt{k_r \cdot D_{NH3}}}{k_L}")
+        st.latex(r"5. \text{Enhancement Factor (E)}: E = \sqrt{1 + Ha^2}")
+
+
+# =====================================================================
+# MODULE 2: PHASE 2 - SURFACE VOLATILIZATION (来自 windtunnel_2.py)
+# =====================================================================
+elif app_mode == "Phase 2: Surface Volatilization":
+    st.title("🌬️ Phase 2: Surface Ammonia Volatilization Kinetics")
+    st.markdown("Reverse-engineering aerodynamic and chemical parameters under severe **evaporative cooling** conditions (6 m/s wind speed).")
+
+    # Experimental Data
+    exp_concentrations = np.array([7.0, 14.0, 21.0, 35.0])
+    exp_fluxes = np.array([0.0845, 0.1184, 0.1748, 0.3524])
+    exp_T_surf = np.array([13.50, 10.40, 4.90, -0.10])
+
+    # Sidebar Parameters for Phase 2
+    st.sidebar.header("⚙️ Phase 2 Parameters")
+    wind_speed = st.sidebar.number_input("Reference Wind Speed (U10, m/s)", min_value=0.00, max_value=20.00, value=6.00, step=0.10, format="%.2f")
+    system_pH = st.sidebar.number_input("Interfacial pH", min_value=7.00, max_value=14.00, value=10.50, step=0.05, format="%.2f")
+    activity_coeff_base = st.sidebar.number_input("Base Activity Coefficient (γ₀)", min_value=0.05, max_value=2.00, value=0.25, step=0.05, format="%.2f")
+
+    def calculate_theoretical_flux(conc_percent, U10, pH, T_C, gamma_base):
+        T_K = T_C + 273.15
+        pKa = 0.09018 + 2729.92 / T_K
+        f_NH3 = 1.0 / (1.0 + 10**(pKa - pH))
         
-        avg_Q = cum_vol / total_time if total_time > 0 else 0
+        K_H = 58.0 * np.exp(4085.0 * (1.0/T_K - 1.0/298.15))
+        R_gas = 0.08206
+        H_cc = 1.0 / (K_H * R_gas * T_K) 
+        
+        U_star = 0.03 * U10 
+        k_g = 1.0e-3 + 46.2e-3 * U_star * 1.4 
+        
+        C_liquid_gm3 = conc_percent * 10000.0 
+        dynamic_gamma = gamma_base * np.exp(0.06 * conc_percent)
+        
+        flux = k_g * H_cc * dynamic_gamma * f_NH3 * C_liquid_gm3
+        return flux, f_NH3, k_g, H_cc, dynamic_gamma
 
-    # ==========================================
-    # 结果面板渲染
-    # ==========================================
-    st.subheader("Phase 1: Thermodynamic Initial Assessment")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Mass to Air (Puff/Escaped)", f"{m_puff:.1f} kg")
-    col2.metric("Mass to Liquid (Dissolved)", f"{m_dissolved:.1f} kg")
-    col3.metric("Un-ionized Fraction (f)", f"{f_unionized*100:.2f} %")
-    if "Surface" in sim_mode or "Combined" in sim_mode:
-        col4.metric("Avg Emission Rate (Q)", f"{avg_Q*1000:.2f} g/s")
-    st.divider()
+    model_fluxes = []
+    for c, T in zip(exp_concentrations, exp_T_surf):
+        flux, _, _, _, _ = calculate_theoretical_flux(c, wind_speed, system_pH, T, activity_coeff_base)
+        model_fluxes.append(flux)
 
-    fig_col1, fig_col2 = st.columns(2) if "Combined" in sim_mode else (st.container(), st.container())
+    _, current_fNH3, current_kg, current_Hcc, current_gamma = calculate_theoretical_flux(
+        14.0, wind_speed, system_pH, exp_T_surf[1], activity_coeff_base
+    )
 
-    # --- 模块 A: 大气扩散展示区 ---
-    if "Surface" in sim_mode or "Combined" in sim_mode:
-        with fig_col1 if "Combined" in sim_mode else st.container():
-            if not "Combined" in sim_mode:
-                st.subheader("Fate of Dissolved Ammonia (1 Hour)")
-                
-                fig_mass = go.Figure()
-                fig_mass.add_trace(go.Scatter(x=times/3600, y=history_dissolved, mode='lines', name='Dissolved', line=dict(color='#1f77b4', width=2)))
-                fig_mass.add_trace(go.Scatter(x=times/3600, y=history_volatilized, mode='lines', name='Volatilized', line=dict(color='#ff7f0e', width=2)))
-                fig_mass.add_trace(go.Scatter(x=times/3600, y=history_bio, mode='lines', name='Biodegraded', line=dict(color='#2ca02c', width=2)))
-                fig_mass.update_layout(xaxis_title="Time (hr)", yaxis_title="Mass (kg)", margin=dict(l=0, r=0, t=30, b=0))
-                st.plotly_chart(fig_mass, use_container_width=True)
-            
-            st.subheader("Atmospheric Plume Dispersion (z = 2m)")
-            x_grid = np.linspace(-10, 100, 120)
-            y_grid = np.linspace(-50, 50, 100)
-            X_mesh, Y_mesh = np.meshgrid(x_grid, y_grid)
-            Z_mesh = np.zeros_like(X_mesh)
-            for i in range(X_mesh.shape[0]):
-                for j in range(X_mesh.shape[1]):
-                    Z_mesh[i, j] = gaussian_plume(avg_Q, u10, X_mesh[i, j], Y_mesh[i, j], z=2, H=0, stability_class=stability) * 1e6
-            
-            fig_air = go.Figure(data=go.Contour(
-                z=Z_mesh, x=x_grid, y=y_grid, colorscale='YlOrRd', 
-                hovertemplate="Downwind: %{x:.1f} m<br>Crosswind: %{y:.1f} m<br>Conc: %{z:.2f} mg/m³<extra></extra>"
-            ))
-            fig_air.add_trace(go.Scatter(
-                x=[0], y=[0], mode='markers', marker=dict(color='black', symbol='star', size=14, line=dict(color='white', width=1.5)), 
-                name='Release Source', cliponaxis=False
-            ))
-            fig_air.update_layout(
-                xaxis_title="Downwind Distance (m)", yaxis_title="Crosswind Distance (m)", 
-                xaxis=dict(range=[-5, max(x_grid) + 5]), margin=dict(l=0, r=0, t=30, b=0)
-            )
-            st.plotly_chart(fig_air, use_container_width=True)
+    col1, col2 = st.columns([3, 1])
 
-    # --- 模块 B: 水下与生态展示区 ---
-    if "Underwater" in sim_mode or "Combined" in sim_mode:
-        with fig_col2 if "Combined" in sim_mode else st.container():
-            st.subheader("Phase 2: Spatial-Temporal Advection Plume")
-            time_sec = eval_time * 3600
-            target_t_sec = target_t * 3600
-            
-            # 1. 定点验证浓度计算
-            point_conc_eval = calc_single_point_conc(m_dissolved, depth, current_u, Dx, Dy, target_x, target_y, target_t_sec)
-            st.success(f"📍 **Receptor Validation Result:** At downstream **{target_x}m**, cross-stream **{target_y}m**, and specifically at **t = {target_t} hours**, the exact concentration is **{point_conc_eval:.4f} mg/L**.")
-            
-            # 2. 空间热力图计算 (使用 eval_time)
-            X_plume, Y_plume, Z_plume, peak_conc_map = calc_underwater_plume(m_dissolved, depth, current_u, Dx, Dy, time_sec)
-            
-            fig_ocean = go.Figure(data=go.Contour(
-                z=Z_plume, x=X_plume[0], y=Y_plume[:, 0], colorscale='Jet',
-                hovertemplate="East: %{x:.1f} m<br>North: %{y:.1f} m<br>Conc: %{z:.2f} mg/L<extra></extra>"
-            ))
-            fig_ocean.add_trace(go.Scatter(
-                x=[0], y=[0], mode='markers', 
-                marker=dict(color='red', symbol='star', size=14, line=dict(color='white', width=1.5)), 
-                name='Release Point', cliponaxis=False
-            ))
-            fig_ocean.add_trace(go.Scatter(
-                x=[target_x], y=[target_y], mode='markers', 
-                marker=dict(color='yellow', symbol='diamond', size=12, line=dict(color='black', width=1)), 
-                name=f'Receptor ({target_x}m)', cliponaxis=False
-            ))
-            
-            fig_ocean.update_layout(
-                xaxis_title="Distance East / Down-current (m)", yaxis_title="Distance North / Cross-current (m)",
-                margin=dict(l=0, r=0, t=30, b=0)
-            )
-            st.plotly_chart(fig_ocean, use_container_width=True)
+    with col1:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        width = 1.5
+        ax.bar(exp_concentrations - width/2, exp_fluxes, width, color="#e74c3c", alpha=0.2, label="_nolegend_")
+        ax.bar(exp_concentrations + width/2, model_fluxes, width, color="#2ecc71", alpha=0.2, label="_nolegend_")
+        ax.plot(exp_concentrations, model_fluxes, color="#2ecc71", linestyle='--', alpha=0.4, zorder=4)
+        ax.scatter(exp_concentrations, exp_fluxes, color="#e74c3c", marker='o', s=120, zorder=5, edgecolor='black', label="Experimental Targets")
+        ax.scatter(exp_concentrations, model_fluxes, color="#2ecc71", marker='*', s=300, zorder=6, edgecolor='black', label="Model Predictions (Coupled $T_{surf}$)")
+        
+        for i in range(len(exp_concentrations)):
+            label_text = f"T = {exp_T_surf[i]:.1f} °C"
+            ax.annotate(label_text, (exp_concentrations[i], model_fluxes[i]), textcoords="offset points", xytext=(0, 15), ha='center', fontsize=10, fontweight='bold', color="#27ae60", bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#2ecc71", lw=1, alpha=0.8))
 
-            # 3. 时间穿透曲线
-            st.subheader(f"Temporal Breakthrough Curve @ Receptor {target_x}m")
-            t_hr_array, conc_time_array = calc_point_concentration_over_time(m_dissolved, depth, current_u, Dx, Dy, target_x, target_y, max_time_hours=target_t*3)
-            
-            fig_breakthrough = go.Figure()
-            fig_breakthrough.add_trace(go.Scatter(
-                x=t_hr_array, y=conc_time_array, mode='lines', 
-                fill='tozeroy', name='TAN Concentration', line=dict(color='purple', width=2)
-            ))
-            # 添加致死线参考
-            fig_breakthrough.add_hline(y=2.1, line_dash="dash", line_color="red", annotation_text="Fish Lethal Limit (2.1 mg/L)")
-            fig_breakthrough.add_vline(x=target_t, line_dash="dash", line_color="red", annotation_text=f"Target Time ({target_t}h)")
-            
-            fig_breakthrough.update_layout(
-                xaxis_title="Time Elapsed (Hours)", yaxis_title="TAN Concentration (mg/L)",
-                margin=dict(l=0, r=0, t=30, b=0)
-            )
-            st.plotly_chart(fig_breakthrough, use_container_width=True)
+        ax.set_title("Discrete Case Validation: Model vs. Experiment @ 6.0 m/s", fontsize=14, fontweight='bold')
+        ax.set_xlabel("Initial Mass Fraction of NH3 (%)", fontsize=12)
+        ax.set_ylabel("Evaporation Flux (g / m²·s)", fontsize=12)
+        ax.set_xticks(exp_concentrations) 
+        ax.set_xlim(0, 40)
+        ax.set_ylim(0, max(max(exp_fluxes), max(model_fluxes)) * 1.3)
+        ax.legend(loc="upper left")
+        ax.grid(True, linestyle="--", alpha=0.5)
+        st.pyplot(fig)
 
-            # 4. 生态响应曲线 (ODE)
-            st.subheader("Result III: Long-Term Ecological Succession")
-            peak_initial_shock = np.max(conc_time_array) if np.max(conc_time_array) > 0 else 14.7 # Worst-case default
-            t_days, bio_solution = solve_eutrophication(initial_tan=peak_initial_shock, base_do=6.5, base_php=0.1, temp_c=temp_c, days=30)
-            
-            fig_eco = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1)
-            fig_eco.add_trace(go.Scatter(x=t_days, y=bio_solution[:, 0], mode='lines', name='TAN (mg/L)', line=dict(color='red', width=2)), row=1, col=1)
-            fig_eco.add_trace(go.Scatter(x=t_days, y=bio_solution[:, 1], mode='lines', name='DO (mg/L)', line=dict(color='blue', width=2)), row=1, col=1)
-            fig_eco.add_trace(go.Scatter(x=t_days, y=bio_solution[:, 2], mode='lines', name='Phytoplankton (mg/L)', line=dict(color='green', width=2)), row=2, col=1)
-            
-            fig_eco.add_hline(y=3.0, row=1, col=1, line_dash="dash", line_color="navy", annotation_text="Hypoxia (3.0 mg/L)")
-            fig_eco.update_layout(height=600, xaxis2_title="Time Elapsed (Days)", margin=dict(l=0, r=0, t=30, b=0))
-            st.plotly_chart(fig_eco, use_container_width=True)
+    with col2:
+        st.subheader("📊 Intermediary Metrics (@ 14%)")
+        st.metric("Local Surface Temp", f"{exp_T_surf[1]:.2f} °C")
+        st.metric("Dynamic Gamma (γ)", f"{current_gamma:.4f}")
+        st.metric("Free NH3 Fraction (f_NH3)", f"{current_fNH3:.2%}")
+        st.metric("Dimensionless Henry (Hcc)", f"{current_Hcc:.5f}")
+        st.info("🎯 **Objective:** Adjust Global pH and Base γ₀ to capture non-ideal behavior automatically at 35%.")
+
+    st.markdown("---")
+    st.subheader("📚 Theoretical Framework & Governing Equations")
+    col_eq1, col_eq2 = st.columns(2)
+    with col_eq1:
+        st.markdown("**1. Chemical Speciation (Emerson et al., 1975)**")
+        st.latex(r"pK_a = 0.09018 + \frac{2729.92}{T_{surf} + 273.15}")
+        st.latex(r"f_{NH3} = \frac{1}{1 + 10^{pK_a - pH_{interfacial}}}")
+        st.markdown("**2. Aerodynamic Correlation (Mackay & Yeun, 1983)**")
+        st.latex(r"k_g = 1.0 \times 10^{-3} + 46.2 \times 10^{-3} \cdot U^* \cdot Sc_G^{-0.67}")
+    with col_eq2:
+        st.markdown("**3. Phase Equilibrium (Sander, 2015)**")
+        st.latex(r"H_{cc} = \frac{1}{K_H \cdot R \cdot T_K}")
+        st.markdown("**4. Interfacial Volatilization Flux**")
+        st.latex(r"J = k_g \cdot H_{cc} \cdot (\gamma_0 \cdot e^{k \cdot C_{initial}}) \cdot f_{NH3} \cdot C_{liquid\_total}")
