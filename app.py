@@ -19,7 +19,7 @@ app_mode = st.sidebar.radio(
 st.sidebar.markdown("---")
 
 # =====================================================================
-# MODULE 1: PHASE 1 - UNDERWATER DISSOLUTION (来自 app1.py)
+# MODULE 1: PHASE 1 - UNDERWATER DISSOLUTION
 # =====================================================================
 if app_mode == "Phase 1: Underwater Dissolution":
     st.title("🌊 Phase 1: Ammonia Dissolution Analysis & Theoretical Calculator")
@@ -33,12 +33,14 @@ if app_mode == "Phase 1: Underwater Dissolution":
         
         with col_in:
             st.subheader("⚙️ Calibration Inputs")
-            kLa_base = st.number_input("Base kLa (at 14 L/min)", value=0.00016, format="%.5f")
-            E_factor = st.number_input("Enhancement Factor (E)", value=5.5, format="%.1f")
+            # 已修正为截图数值: 0.00015
+            kLa_base = st.number_input("Base kLa (at 14 L/min)", value=0.00015, format="%.5f")
+            # 已修正为截图数值: 2.5
+            E_factor = st.number_input("Enhancement Factor (E)", value=2.5, format="%.1f")
             
             st.markdown("---")
             st.subheader("🧪 Environment")
-            pH_val = st.slider("System pH", 7.0, 12.0, 10.8)
+            pH_val = st.slider("System pH", 7.0, 12.0, 10.80)
             temp_val = st.slider("Temperature (°C)", 0.0, 40.0, 20.0)
             
             def get_free_nh3_fraction(pH, temp_C):
@@ -127,7 +129,7 @@ if app_mode == "Phase 1: Underwater Dissolution":
 
 
 # =====================================================================
-# MODULE 2: PHASE 2 - SURFACE VOLATILIZATION (来自 windtunnel_2.py)
+# MODULE 2: PHASE 2 - SURFACE VOLATILIZATION 
 # =====================================================================
 elif app_mode == "Phase 2: Surface Volatilization":
     st.title("🌬️ Phase 2: Surface Ammonia Volatilization Kinetics")
@@ -141,8 +143,10 @@ elif app_mode == "Phase 2: Surface Volatilization":
     # Sidebar Parameters for Phase 2
     st.sidebar.header("⚙️ Phase 2 Parameters")
     wind_speed = st.sidebar.number_input("Reference Wind Speed (U10, m/s)", min_value=0.00, max_value=20.00, value=6.00, step=0.10, format="%.2f")
-    system_pH = st.sidebar.number_input("Interfacial pH", min_value=7.00, max_value=14.00, value=10.50, step=0.05, format="%.2f")
-    activity_coeff_base = st.sidebar.number_input("Base Activity Coefficient (γ₀)", min_value=0.05, max_value=2.00, value=0.25, step=0.05, format="%.2f")
+    # 已修正为截图数值: 9.25
+    system_pH = st.sidebar.number_input("Interfacial pH", min_value=7.00, max_value=14.00, value=9.25, step=0.05, format="%.2f")
+    # 已修正为截图数值: 0.35
+    activity_coeff_base = st.sidebar.number_input("Base Activity Coefficient (γ₀)", min_value=0.05, max_value=2.00, value=0.35, step=0.05, format="%.2f")
 
     def calculate_theoretical_flux(conc_percent, U10, pH, T_C, gamma_base):
         T_K = T_C + 273.15
@@ -202,7 +206,7 @@ elif app_mode == "Phase 2: Surface Volatilization":
         st.metric("Dynamic Gamma (γ)", f"{current_gamma:.4f}")
         st.metric("Free NH3 Fraction (f_NH3)", f"{current_fNH3:.2%}")
         st.metric("Dimensionless Henry (Hcc)", f"{current_Hcc:.5f}")
-        st.info("🎯 **Objective:** Adjust Global pH and Base γ₀ to capture non-ideal behavior automatically at 35%.")
+        st.info("🎯 **Objective:** Adjust Global pH and Base γ₀. The exponential correction logic ensures non-ideal behavior is captured automatically at 35%.")
 
     st.markdown("---")
     st.subheader("📚 Theoretical Framework & Governing Equations")
